@@ -74,6 +74,7 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer)
 		printf("  Start Address: 0x%p\n", caveInfo[i].pStartAddress);
 		printf("  End Address: 0x%p\n", caveInfo[i].pEndAddress);
 		printf("  Size: %d bytes\n", caveInfo[i].dwSize);
+		printf("  Offset: 0x%zX\n", (DWORD64)(caveInfo[i].pStartAddress - pRawData));
 	}
 
 	return 0;
