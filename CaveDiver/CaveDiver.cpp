@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <Windows.h>
 
-#define DEBUG 1
-
 typedef struct _CAVE_INFO
 {
 	PBYTE pStartAddress;
