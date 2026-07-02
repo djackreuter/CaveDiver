@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="CaveDiver/CaveDiver.vcxproj" />
+  <Project Path="CaveDiver/CaveDiver.vcxproj" Id="eaabaf56-5197-460c-89b2-366bde1ab629" />
 </Solution>

